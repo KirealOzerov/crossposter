@@ -50,34 +50,30 @@ def post_to_telegram(text, files):
     token = os.environ.get('TG_TOKEN', '').strip()
     chat_id = os.environ.get('TG_CHAT_ID', '').strip()
     
-    if not token or not chat_id:
-        return None
+    if not token:
+        print("⚠️ TG_TOKEN не найден в настройках Render!")
+        return
+    if not chat_id:
+        print("⚠️ TG_CHAT_ID не найден в настройках Render!")
+        return
 
-    # Попробуем домен, который обычно открыт в облаках (через Cloudflare Workers)
-    # Это зеркало перенаправляет трафик на api.telegram.org
-    mirror_url = f"https://tg.rip/bot{token}" 
-
-    session = requests.Session()
+    print(f"📡 Попытка отправки в ТГ (чат: {chat_id})...")
+    base_url = f"https://api.telegram.org/bot{token}"
+    
     try:
         if not files:
-            r = session.post(f"{mirror_url}/sendMessage", 
-                             data={'chat_id': chat_id, 'text': text}, timeout=20)
-            return [r.json()]
-        
-        responses = []
-        for f_id, f_data in files.items():
-            res = session.post(
-                f"{mirror_url}/sendDocument", 
-                data={'chat_id': chat_id, 'caption': text}, 
-                files={'document': (f_id, f_data)},
-                timeout=30 
-            )
-            print(f"📡 ТГ Зеркало Ответ: {res.status_code}")
-            responses.append(res.json())
-        return responses
+            r = requests.post(f"{base_url}/sendMessage", data={'chat_id': chat_id, 'text': text}, timeout=20)
+            print(f"📡 Ответ ТГ (текст): {r.status_code} {r.text}")
+        else:
+            for f_id, f_data in files.items():
+                r = requests.post(
+                    f"{base_url}/sendDocument", 
+                    data={'chat_id': chat_id, 'caption': text}, 
+                    files={'document': (f_id, f_data)}, timeout=30)
+                print(f"📡 Ответ ТГ (файл): {r.status_code} {r.text}")
+        print("✅ Telegram: Запрос отправлен")
     except Exception as e:
-        print(f"❌ ТГ не пробился даже через зеркало: {e}")
-        return None
+        print(f"❌ Telegram Critical Error: {e}")
 
 def post_to_vk(text, files):
     token = os.environ.get('VK_TOKEN', '').strip()
