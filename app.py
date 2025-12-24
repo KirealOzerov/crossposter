@@ -10,6 +10,9 @@ import uvicorn
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 from googleapiclient.http import MediaIoBaseDownload
+import os
+print(f"DEBUG: TG_TOKEN length = {len(os.environ.get('TG_TOKEN', ''))}")
+print(f"DEBUG: TG_CHAT_ID = {os.environ.get('TG_CHAT_ID', 'None')}")
 
 app = FastAPI()
 
