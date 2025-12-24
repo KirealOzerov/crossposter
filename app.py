@@ -22,16 +22,17 @@ def post_to_vk(text, file_paths):
     try:
         attachments = []
         for path in file_paths:
-            # 1. Получаем сервер для загрузки
+            # Для ВК видео грузится иначе, пока оставим фото-логику или просто пропустим тяжелые файлы
+            if os.path.getsize(path) > 50 * 1024 * 1024: 
+                print(f"⚠️ ВК: Файл {path} слишком велик для базовой загрузки")
+                continue
+                
             res = requests.get("https://api.vk.com/method/photos.getWallUploadServer",
                 params={'access_token': token, 'group_id': group_id, 'v': '5.131'}).json()
             upload_url = res.get('response', {}).get('upload_url')
-            
             if upload_url:
-                # 2. Загружаем файл
                 with open(path, 'rb') as f:
                     up_res = requests.post(upload_url, files={'photo': f}).json()
-                # 3. Сохраняем фото
                 save_res = requests.get("https://api.vk.com/method/photos.saveWallPhoto",
                     params={'access_token': token, 'group_id': group_id, 'v': '5.131',
                             'server': up_res['server'], 'photo': up_res['photo'], 'hash': up_res['hash']}).json()
@@ -39,11 +40,10 @@ def post_to_vk(text, file_paths):
                     p = save_res['response'][0]
                     attachments.append(f"photo{p['owner_id']}_{p['id']}")
 
-        # 4. Постим на стену
         requests.get("https://api.vk.com/method/wall.post",
             params={'access_token': token, 'owner_id': f"-{group_id}", 'message': text, 
                     'attachments': ",".join(attachments), 'v': '5.131'})
-        print("✅ ВК: Опубликовано с фото", flush=True)
+        print("✅ ВК: Опубликовано", flush=True)
     except Exception as e: print(f"❌ ВК Ошибка: {e}", flush=True)
 
 def post_to_telegram(text, file_paths):
@@ -54,15 +54,29 @@ def post_to_telegram(text, file_paths):
         if not file_paths:
             requests.post(f"{base_url}/sendMessage", data={'chat_id': chat_id, 'text': text})
         else:
-            # Отправляем как PHOTO, а не как документ
             for path in file_paths:
+                file_size = os.path.getsize(path)
+                # Если файл больше 50МБ - Telegram API его скорее всего отклонит
+                if file_size > 50 * 1024 * 1024:
+                    print(f"⚠️ TG: Файл {path} ({file_size//1024//1024}MB) превышает лимит API 50MB!")
+                    requests.post(f"{base_url}/sendMessage", data={'chat_id': chat_id, 'text': text + "\n\n(Файл слишком велик для отправки)"})
+                    continue
+
                 with open(path, 'rb') as f:
-                    requests.post(f"{base_url}/sendPhoto", data={'chat_id': chat_id, 'caption': text}, files={'photo': f})
-        print("✅ Telegram: Опубликовано как фото", flush=True)
+                    # Пытаемся определить: видео это или фото
+                    is_video = path.lower().endswith(('.mp4', '.mov', '.avi'))
+                    method = "sendVideo" if is_video else "sendPhoto"
+                    file_type = "video" if is_video else "photo"
+                    
+                    r = requests.post(f"{base_url}/{method}", 
+                                      data={'chat_id': chat_id, 'caption': text}, 
+                                      files={file_type: f}, timeout=60)
+                    print(f"📡 TG Response: {r.status_code} {r.text}", flush=True)
+        print("✅ Telegram: Завершено", flush=True)
     except Exception as e: print(f"❌ TG Ошибка: {e}", flush=True)
 
 def worker():
-    print("🤖 Воркер запущен и слушает таблицу...", flush=True)
+    print("🤖 Воркер активен...", flush=True)
     while True:
         try:
             sheets, drive = get_gspread_service()
@@ -71,8 +85,7 @@ def worker():
             for i, row in enumerate(rows):
                 if len(row) >= 3 and row[2] == 'Pending':
                     row_idx = i + 2
-                    print(f"📦 Найдена строка {row_idx}, начинаю работу...", flush=True)
-                    
+                    print(f"📦 Строка {row_idx}: Старт", flush=True)
                     sheets.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"{SHEET_NAME}!C{row_idx}",
                         valueInputOption="RAW", body={'values': [['Processing']]} ).execute()
                     
@@ -81,7 +94,11 @@ def worker():
                     
                     paths = []
                     for fid in file_ids:
-                        temp_path = f"/tmp/{fid}.jpg"
+                        # Получаем инфо о файле, чтобы знать расширение
+                        file_metadata = drive.files().get(fileId=fid, fields='name').execute()
+                        ext = ".mp4" if "video" in file_metadata.get('name', '').lower() else ".jpg"
+                        temp_path = f"/tmp/{fid}{ext}"
+                        
                         request = drive.files().get_media(fileId=fid)
                         with io.FileIO(temp_path, 'wb') as fh:
                             downloader = MediaIoBaseDownload(fh, request)
@@ -97,11 +114,10 @@ def worker():
                     
                     sheets.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"{SHEET_NAME}!C{row_idx}",
                         valueInputOption="RAW", body={'values': [['Posted']]} ).execute()
-                    print(f"🏁 Строка {row_idx} готова!", flush=True)
                     gc.collect()
             time.sleep(30)
         except Exception as e:
-            print(f"❌ Ошибка: {e}", flush=True)
+            print(f"❌ Ошибка воркера: {e}", flush=True)
             time.sleep(60)
 
 @app.on_event("startup")
